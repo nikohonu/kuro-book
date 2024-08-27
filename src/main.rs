@@ -1,4 +1,6 @@
-use std::{fs, path::PathBuf};
+use epub::doc::EpubDoc;
+use scraper::{Html, Selector};
+use std::path::PathBuf;
 
 use clap::{Parser, ValueHint};
 
@@ -24,8 +26,8 @@ fn split(line: &str) -> Vec<String> {
             sentence.clear();
         }
     }
-    if !sentence.is_empty() {
-        result.push(sentence);
+    if !sentence.trim().is_empty() {
+        result.push(sentence.trim().to_string().clone());
     }
     result
 }
@@ -37,19 +39,50 @@ fn main() {
         println!("This path isn't a file!");
         return;
     }
-    let text = fs::read_to_string(book_path).unwrap_or_else(|_| {
+    let mut book = EpubDoc::new(book_path).unwrap_or_else(|_| {
         println!("Can't read the file!");
         std::process::exit(1);
     });
-    for line in text.lines() {
-        if line.is_empty() {
-            continue;
+    book.go_next();
+    let mut keys: Vec<String> = Vec::new();
+    for key in book.resources.keys() {
+        if key.starts_with("p-0") {
+            keys.push(key.clone());
         }
-        // println!("Line {}, {}", line, line.len());
-        let sentences = split(line.trim());
-        for sentence in sentences {
-            // println!("Sentence {}, {}", sentence, sentence.len());
-            println!("{}", sentence);
+    }
+    keys.sort();
+    for key in keys {
+        let text = book
+            .get_resource_str(&key)
+            .unwrap_or_else(|| {
+                println!("Can't parce the text!");
+                std::process::exit(1);
+            })
+            .0;
+        let fragment = Html::parse_fragment(&text);
+        let selector = Selector::parse("p.calibre3").unwrap();
+        for element in fragment.select(&selector) {
+            let mut line = element.inner_html();
+            let text = element.text().collect::<Vec<_>>();
+            if text.is_empty() {
+                continue;
+            }
+            for child in element.child_elements() {
+                let in_ruby = child.html();
+                let out_ruby = format!(
+                    " {}",
+                    in_ruby
+                        .replace("<ruby>", "")
+                        .replace("</ruby>", "")
+                        .replace("<rt>", "[")
+                        .replace("</rt>", "] ")
+                        .trim()
+                );
+                line = line.replace(&in_ruby, &out_ruby).replace(" ", " ");
+            }
+            for sentence in split(&line) {
+                println!("{}", sentence);
+            }
         }
     }
 }
